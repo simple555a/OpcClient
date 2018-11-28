@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Threading;
 using System.Collections.Generic;
+using System.IO;
+using System.Net;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -13,8 +15,10 @@ namespace OPCClientCSTest
     {
         private Opc.Da.Server serverHandle;               // Переменая для работы с сервером
         public bool isConnected = false;                  // Статус подключения к серверу
-        private Subscription subscription;
+        private Subscription subscription;                 // Объект, содержащий информацию о подписках
         private Factory factory = new Factory();
+        private OpcClientConfig config = new OpcClientConfig(); // Объет, содержащий конфигурационные данные
+        private List<Opc.Da.Item> tagList = new List<Opc.Da.Item>();      // Список названий всех тегов
 
         /// <summary>
         /// Конструктор
@@ -22,13 +26,38 @@ namespace OPCClientCSTest
         public OpcClient()
         {
             serverHandle = new Opc.Da.Server(factory, null);
-
+            config.GetConfig();
             //subscriptionState.Active = false;
+        }
+
+        /// <summary>
+        /// Подключение к серверу OPC. Данные для подключения берутся из конфигурационного файла. 
+        /// </summary>
+        public void Connect()
+        {
+            // Создание URL
+            string url = "opcda://localhost/" + config.opcServerId;
+            //string url = "opcda://" + config.amicumIp + "/" + config.opcServerId;
+            var opcUrl = new Opc.URL(url);
+            var connectData = new Opc.ConnectData(new System.Net.NetworkCredential());
+
+            try
+            {
+                serverHandle.Connect(opcUrl, connectData);
+                isConnected = true;
+                InitTagList();
+                Console.WriteLine("Connected to {0}", url);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine("Failed to connect - status {0}", exception);
+            }
         }
 
         /// <summary>
         /// Подключение к серверу OPC. 
         /// </summary>
+        /// <overloads> </overloads>
         public void Connect(string hostIp, string serverId)
         {
             // Создание URL
@@ -95,6 +124,37 @@ namespace OPCClientCSTest
         }
 
         /// <summary>
+        /// Чтение одного конкретного значения.
+        /// В случае успешного чтения возвращает значение в формате string.
+        /// Если чтение не удалось, возвращает пустую строку
+        /// </summary>
+        /// <param name="itemName"> название значения на OPC сервере </param>
+        public string ReadAndSave(string itemName)
+        {
+            var result = new ItemValueResult[1];
+
+            var items = new Item[1];
+            items[0] = new Opc.Da.Item
+            {
+                ItemName = itemName
+            };
+            try
+            {
+                result = serverHandle.Read(items);
+
+                SendItemValueRequest(result[0]);
+
+                return result[0].Value.ToString();
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine("Reading value failed - status: {0}", exception);
+            }
+
+            return "";
+        }
+
+        /// <summary>
         /// Запись одного конкретного значения
         /// </summary>
         public void Write(string itemName, string value)
@@ -111,21 +171,49 @@ namespace OPCClientCSTest
         /// <summary>
         /// Подписка на изменение значения на сервере
         /// </summary>
-        public void Subscribe()
+        public void SubscribeAll()
         {
-            var subscriptionState = new SubscriptionState();
-            subscriptionState.Name = "Group";
-            subscriptionState.Active = true;
+            var subscriptionState = new SubscriptionState
+            {
+                Name = "All",
+                Active = true
+            };
+
             subscription = (Opc.Da.Subscription)serverHandle.CreateSubscription(subscriptionState);
 
-            Opc.Da.Item[] items = new Opc.Da.Item[3];
+            Opc.Da.Item[] items = tagList.ToArray();
+
+            items = subscription.AddItems(items);
+
+            subscription.DataChanged += new Opc.Da.DataChangedEventHandler(DataChange);
+        }
+
+        /// <summary>
+        /// Подписка на изменение конкретного значения на сервере
+        /// </summary>
+        public void Subscribe(string itemName)
+        {
+            var subscriptionState = new SubscriptionState
+            {
+                Name = itemName,
+                Active = true
+            };
+
+            try
+            {
+                subscription = (Opc.Da.Subscription)serverHandle.CreateSubscription(subscriptionState);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine("Error {0}", exception.Message);
+                return;
+            }
+            
+            
+            Opc.Da.Item[] items = new Opc.Da.Item[1];
 
             items[0] = new Opc.Da.Item();
-            items[0].ItemName = "StringValue";
-            items[1] = new Opc.Da.Item();
-            items[1].ItemName = "Random.Int1";
-            items[2] = new Opc.Da.Item();
-            items[2].ItemName = "Random.Time";
+            items[0].ItemName = itemName;
 
             items = subscription.AddItems(items);
 
@@ -138,23 +226,31 @@ namespace OPCClientCSTest
         /// <param name="group"></param>
         /// <param name="hReq"></param>
         /// <param name="items"></param>
-        static void DataChange(object group, object hReq, Opc.Da.ItemValueResult[] items)
+        void DataChange(object group, object hReq, Opc.Da.ItemValueResult[] items)
         {
             Console.WriteLine("-----------------");
             for (int i = 0; i < items.GetLength(0); i++)
             {
                 Console.WriteLine("Item DataChange - ItemId: {0}", items[i].ItemName);
-                Console.WriteLine(" Value: {0,-20}", items[i].Value);
-                Console.WriteLine(" TimeStamp: {0:00}:{1:00}:{2:00}.{3:000}",
-                items[i].Timestamp.Hour,
-                items[i].Timestamp.Minute,
-                items[i].Timestamp.Second,
-                items[i].Timestamp.Millisecond);
+                Console.WriteLine("Value: {0,-20}", items[i].Value);
+                //Console.WriteLine(" TimeStamp: {0:00}:{1:00}:{2:00}.{3:000}",
+                //items[i].Timestamp.Hour,
+                //items[i].Timestamp.Minute,
+                //items[i].Timestamp.Second,
+                //items[i].Timestamp.Millisecond);
+                Console.WriteLine("TimeStamp: {0}", items[i].Timestamp.Date + items[i].Timestamp.TimeOfDay);
+
+                Console.WriteLine("Sending request to controller");
+                SendItemValueRequest(items[i]);
             }
             Console.WriteLine("-----------------");
             Thread.Sleep(3000);
         }
 
+        /// <summary>
+        /// Метод для поиска всех тегов на ОРС сервере
+        /// </summary>
+        /// <param name="itemName"></param>
         public void Browse(string itemName = "")
         {
             var itemIdentifier = new Opc.ItemIdentifier();
@@ -183,6 +279,102 @@ namespace OPCClientCSTest
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Вспомогательный метод для инициализации списка тегов с сервера.
+        /// Вызывается при соединении с сервером
+        /// </summary>
+        /// <param name="itemName"></param>
+        void InitTagList(string itemName = "")
+        {
+            var itemIdentifier = new Opc.ItemIdentifier();
+            itemIdentifier.ItemName = itemName;
+
+            var browseFilters = new Opc.Da.BrowseFilters();
+            browseFilters.BrowseFilter = browseFilter.all;
+
+            var browsePosition = new Opc.Da.BrowsePosition(itemIdentifier, browseFilters);
+
+            BrowseElement[] browseElements = serverHandle.Browse(itemIdentifier, browseFilters, out browsePosition);
+
+            if (browseElements != null)
+            {
+                foreach (BrowseElement element in browseElements)
+                {
+                    if (element.IsItem)
+                    {
+                        var item = new Opc.Da.Item
+                        {
+                            ItemName = element.ItemName
+                        };
+                        tagList.Add(item);
+                    }
+                    else
+                    {
+                        InitTagList(element.ItemName);
+                    }
+                }
+            }
+        }
+
+        public void UnsubscribeAll()
+        {
+            try
+            {
+                serverHandle.CancelSubscription(subscription);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine("Error in Unsubscribing  {0}", exception);
+            }
+        }
+
+        private void SendItemValueRequest(Opc.Da.ItemValue item)
+        {
+            // Генерация URL в котором производится сохранение параметра
+            string url = "http://" + config.amicumIp;
+            if (config.amicumPort != "")
+            {
+                url += ":" + config.amicumPort;
+            }
+            url += "/opc/handle-opc-data";
+
+            Console.WriteLine(url);
+
+            // Отправка данных на контроллер OPC
+            WebRequest request = WebRequest.Create(url);
+            request.Method = "POST";
+            // Данные для отправки
+            string data = "itemName=" + item.ItemName;
+            data += "&itemValue=" + item.Value.ToString();
+            data += "&dateTime=" + item.Timestamp.ToString("yyyy-MM-dd HH:mm:ss") + "." + item.Timestamp.Millisecond;
+            //data += "&dateTime=" + (item.Timestamp.Date + item.Timestamp.TimeOfDay) + "." + item.Timestamp.Millisecond;
+            data += "&connectString=" + serverHandle.Name;
+            Console.WriteLine(data);
+            // Преобразуем данные в массив байтов
+            byte[] byteArray = System.Text.Encoding.UTF8.GetBytes(data);
+            // Устанавливаем тип содержимого - параметр ContentType
+            request.ContentType = "application/x-www-form-urlencoded";
+            // Устанавливаем заголовок Content-Length запроса - свойство ContentLength
+            request.ContentLength = byteArray.Length;
+
+            // Записываем данные в поток запроса
+            using (Stream dataStream = request.GetRequestStream())
+            {
+                dataStream.Write(byteArray, 0, byteArray.Length);
+            }
+
+            // Получение ответа от сервера
+            WebResponse response = request.GetResponse();
+            using (Stream stream = response.GetResponseStream())
+            {
+                using (StreamReader reader = new StreamReader(stream))
+                {
+                    Console.WriteLine(reader.ReadToEnd());
+                }
+            }
+            response.Close();
         }
     }
 }

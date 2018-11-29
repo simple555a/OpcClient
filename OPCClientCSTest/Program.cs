@@ -10,35 +10,30 @@ namespace OPCClientCSTest
     class Program
     {
         static void Main(string[] args)
-        { 
+        {
             var client = new OpcClient();
-          
+
             client.Connect();
 
-            if (client.isConnected)
+            Thread writingValuesThread = new Thread(new ParameterizedThreadStart(LoopGetWriteValueFromController));
+            writingValuesThread.Start(client);
+
+            while (true)
             {
-                client.Browse();
-
-                for (int i=0; i<10; i++)
-                {
-                    Console.WriteLine("i = {0}", i);
-                    client.SubscribeAll();
-                    client.UnsubscribeAll();
-                    Thread.Sleep(5000);
-                }
-
-                //client.SubscribeAll();
-
-                client.ReadAndSave("IntegerValue");
-                Console.ReadKey();
-                client.ReadAndSave("IntegerValue");
-
-                Console.WriteLine("Press Enter to disconnect");
-                Console.ReadKey();
-                client.Disconnect();
+                client.SubscribeAll();
+                Thread.Sleep(5000);
+                client.UnsubscribeAll();
             }
+        }
 
-            Console.ReadKey();
+        public static void LoopGetWriteValueFromController(object opcClient)
+        {
+            OpcClient client = (OpcClient)opcClient;
+            while (client.IsConnected())
+            {
+                client.GetWriteValueFromController();
+                Thread.Sleep(10000);
+            }
         }
     }
 }

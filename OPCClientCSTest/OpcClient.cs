@@ -8,14 +8,16 @@ using System.Text;
 using System.Threading.Tasks;
 using Opc.Da;
 using OpcCom;
+using System.Runtime.Serialization.Json;
+using System.Runtime.Serialization;
+using Newtonsoft.Json;
 
 namespace OPCClientCSTest
 {
     class OpcClient
     {
         private Opc.Da.Server serverHandle;               // Переменая для работы с сервером
-        public bool isConnected = false;                  // Статус подключения к серверу
-        private Subscription subscription;                 // Объект, содержащий информацию о подписках
+        private Subscription subscription;                // Объект, содержащий информацию о подписках
         private Factory factory = new Factory();
         private OpcClientConfig config = new OpcClientConfig(); // Объет, содержащий конфигурационные данные
         private List<Opc.Da.Item> tagList = new List<Opc.Da.Item>();      // Список названий всех тегов
@@ -44,7 +46,6 @@ namespace OPCClientCSTest
             try
             {
                 serverHandle.Connect(opcUrl, connectData);
-                isConnected = true;
                 InitTagList();
                 Console.WriteLine("Connected to {0}", url);
             }
@@ -69,7 +70,6 @@ namespace OPCClientCSTest
             try
             {
                 serverHandle.Connect(opcUrl, connectData);
-                isConnected = true;
                 Console.WriteLine("Connected to {0}", url);
             }
             catch (Exception exception)
@@ -86,13 +86,21 @@ namespace OPCClientCSTest
             try
             {
                 serverHandle.Disconnect();
-                isConnected = false;
                 Console.WriteLine("Disconnect succeeded");
             }
             catch (Exception exception)
             {
                 Console.WriteLine("Failed to disconnect - status {0}", exception);
             }
+        }
+
+        /// <summary>
+        /// Проверка на соединение с сервером ОРС
+        /// </summary>
+        /// <returns></returns>
+        public bool IsConnected()
+        {
+            return serverHandle.IsConnected;
         }
 
         /// <summary>
@@ -376,5 +384,50 @@ namespace OPCClientCSTest
             }
             response.Close();
         }
+
+        /// <summary>
+        /// Метод для записи значений тегов на сервер.
+        /// Обращается к контроллеру для получения из кеша массива тегов и их
+        /// значений, затем записывает все теги на сервер.
+        /// </summary>
+        public void GetWriteValueFromController()
+        {
+            if (!serverHandle.IsConnected)
+            {
+                Console.WriteLine("Нет подключения к серверу ОРС");
+                return;
+            }
+
+            // Генерация URL в котором производится сохранение параметра
+            string url = "http://" + config.amicumIp;
+            if (config.amicumPort != "")
+            {
+                url += ":" + config.amicumPort;
+            }
+            url += "/opc/get-opc-write-value";
+
+            Console.WriteLine(url);
+
+            // Запрос к контроллеру на получение тегов для записи с последующей записью значений
+            using (var webClient = new WebClient())
+            {
+                var response = webClient.DownloadString(url);
+                Console.WriteLine(response);
+                try
+                {
+                    var writeValues = JsonConvert.DeserializeObject<List<WriteItem>>(response);
+                    foreach (var item in writeValues)
+                    {
+                        Write(item.itemName, item.itemValue);
+                    }
+                } catch (Exception exception)
+                {
+                    // Нужно будет убрать в финале, либо придумать другую обработку
+                    Console.WriteLine("Кеш тегов для записи пуст. Исключение:");
+                    Console.WriteLine(exception);
+                }
+            }
+        }
+
     }
 }
